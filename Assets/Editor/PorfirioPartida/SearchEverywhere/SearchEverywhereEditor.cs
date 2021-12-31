@@ -6,9 +6,14 @@ using System.Reflection;
 using UnityEditor;
 using UnityEngine;
 /*
+ * TODO: Optimize lookups.
  * TODO: Support Custom Assembly. Most likely inside ListActions
  * TODO: Support / and \ for file lookups.
  * TODO: Support refresh OnEnable/OnAwake
+ * TODO: Add Colors
+ * TODO: Add panel instead of button
+ * TODO: Add tabs
+ * TODO: Index for big projects?
  */
 namespace Editor.PorfirioPartida.SearchEverywhere
 {
@@ -16,8 +21,8 @@ namespace Editor.PorfirioPartida.SearchEverywhere
     {
         private GUIStyle _buttonStyle;
         private static HashSet<string> _filesResult;
-        private static HashSet<string> _actions;
         private static string _searchString = "";
+        private readonly MenuItemsScanner _menuItemsScanner = new MenuItemsScanner();
         
         [MenuItem("Tools/SearchEverywhere #&f")] // Alt + Shift + F
         public static void SearchEverywhere()
@@ -42,51 +47,9 @@ namespace Editor.PorfirioPartida.SearchEverywhere
 
         private void OnEnable()
         {
-            ListActions();
+            _menuItemsScanner.Scan();
         }
 
-        private static List<MenuItem> GetClassMenuItems(Type t)
-        {
-            return GetMethodsMenuItems(t);
-        }
-
-        private static List<MenuItem> GetMethodsMenuItems(Type t)
-        {
-            var methodsInfo = t.GetMethods(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static);
-            return methodsInfo.Select(GetMenuItem).Where(menuItem => menuItem != null).ToList();
-        }
-
-        private static MenuItem GetMenuItem(MemberInfo memberInfo)
-        {
-            return (MenuItem)Attribute.GetCustomAttribute(memberInfo, typeof (MenuItem));
-        }
-
-        private void ListActions()
-        {
-            _actions = new HashSet<string>();
-            var editorAssembly = Assembly.GetAssembly(typeof(EditorWindow));
-            var defaultAssembly = Assembly.GetExecutingAssembly();
-            listActionByAssembly(editorAssembly);
-            listActionByAssembly(defaultAssembly);
-        }
-
-        private static void listActionByAssembly(Assembly assembly)
-        {
-            var types = assembly.GetTypes();
-            foreach (var type in types)
-            {
-                var menuItems = GetClassMenuItems(type);
-                if (menuItems == null || menuItems.Count == 0)
-                {
-                    continue;
-                }
-
-                foreach (var menuItem in menuItems)
-                {
-                    _actions.Add(menuItem.menuItem);
-                }
-            }
-        }
 
         private void OnGUI()
         {   
@@ -116,7 +79,7 @@ namespace Editor.PorfirioPartida.SearchEverywhere
 
         private void RenderActions()
         {
-            RenderAction(_actions, "Action");
+            RenderAction(_menuItemsScanner.GetActions(), "Action");
         }
 
         private void RenderMisc(HashSet<string> filesResult)
@@ -133,6 +96,48 @@ namespace Editor.PorfirioPartida.SearchEverywhere
         {
             RenderAsset(filesResult, "Prefab", ".prefab");
         }
+        private static readonly string[] Keys = { "%", "&" , "#"};
+
+        private string replaceCtrlShiftAlt(string pattern)
+        {
+            var shortcutDictionary = new Dictionary<string, string>
+            {
+                { "%", "Ctrl" },
+                { "&", "Alt" },
+                { "#", "Shift" }
+            };
+
+            var shortcutList = new List<string>();
+            if (Keys.Any(pattern.Contains))
+            {
+                foreach(var key in Keys){
+                    if (pattern.Contains(key))
+                    {
+                        pattern = pattern.Replace(key, "");
+                        shortcutList.Add(shortcutDictionary[key]);
+                    }
+                }
+                shortcutList.Add(pattern.ToUpper());
+
+                var newPattern = string.Join(" + ", shortcutList.ToArray());
+                return $" ({newPattern})";
+            }
+
+            return pattern;
+        }
+
+        private string CleanAction(string action)
+        {
+            var tokens = action.Split(' ');
+            if (tokens.Length <= 1)
+            {
+                return action;
+            }
+
+            var lastItem = tokens[tokens.Length - 1];
+            var allButLast = string.Join(" ", tokens, 0, tokens.Length - 1);
+            return allButLast + replaceCtrlShiftAlt(lastItem);
+        }
 
         private void RenderAction(HashSet<string> results, string prefix)
         {
@@ -147,7 +152,7 @@ namespace Editor.PorfirioPartida.SearchEverywhere
                     continue;
                 }
 
-                var b = GUILayout.Button($"{prefix} | {r}", _buttonStyle);
+                var b = GUILayout.Button($"{prefix} | {CleanAction(r)}", _buttonStyle);
                 if (!b) continue;
                 
                 ClickAction(r);
@@ -201,7 +206,7 @@ namespace Editor.PorfirioPartida.SearchEverywhere
             _filesResult = new HashSet<string>();
             GetPrefabs("*" + _searchString + "*");
             GetScripts("*" + _searchString + "*");
-            GetMiscFiles("*" + _searchString + "*");
+            GetMiscFiles(_filesResult, "*" + _searchString + "*");
         }
         private static void GetPrefabs(string searchString)
         {
@@ -226,26 +231,26 @@ namespace Editor.PorfirioPartida.SearchEverywhere
         }
         private void GetScripts(string searchString)
         {
-            // _scriptsResults = new HashSet<string>();
-            
-            var scriptsResults  = System.IO.Directory.GetFiles("Assets" + Path.DirectorySeparatorChar, searchString +".cs", System.IO.SearchOption.AllDirectories);
+            var scriptsResults  = Directory.GetFiles("Assets" + Path.DirectorySeparatorChar, searchString +".cs", System.IO.SearchOption.AllDirectories);
             foreach (var scriptResult in scriptsResults)
             {
-                // _scriptsResults.Add(scriptResult);
                 _filesResult.Add(scriptResult);
             }
         }
 
-        private void GetMiscFiles(string searchString)
+        private void GetMiscFiles(ISet<string> holder, string searchString, string fileType = "")
         {
-            var scriptsResults  = System.IO.Directory.GetFiles("Assets" + Path.DirectorySeparatorChar, searchString, System.IO.SearchOption.AllDirectories);
+            var searchPattern = searchString + fileType;
+            var scriptsResults  = Directory
+                .GetFiles("Assets" + Path.DirectorySeparatorChar, searchPattern, SearchOption.AllDirectories)
+                .Where(n => !n.EndsWith(".meta"));
             foreach (var scriptResult in scriptsResults)
             {
-                if (scriptResult.EndsWith(".meta"))
-                {
-                    continue;
-                }
-                _filesResult.Add(scriptResult);
+                // if (scriptResult.EndsWith(".meta"))
+                // {
+                //     continue;
+                // }
+                holder.Add(scriptResult);
             }
         }
 
